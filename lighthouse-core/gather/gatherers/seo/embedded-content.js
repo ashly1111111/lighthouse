@@ -44,14 +44,14 @@ class EmbeddedContent extends FRGatherer {
   /** @type {LH.Gatherer.GathererMeta} */
   meta = {
     supportedModes: ['snapshot', 'navigation'],
-  }
+  };
 
   /**
    * @param {LH.Gatherer.FRTransitionalContext} passContext
    * @return {Promise<LH.Artifacts['EmbeddedContent']>}
    */
-  snapshot(passContext) {
-    return passContext.driver.evaluate(getEmbeddedContent, {
+  getArtifact(passContext) {
+    return passContext.driver.executionContext.evaluate(getEmbeddedContent, {
       args: [],
       deps: [
         pageFunctions.getElementsInDocument,

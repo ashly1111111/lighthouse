@@ -49,14 +49,15 @@ function collectFormElements() {
       forms.set(parentFormElement, newFormObj);
     }
     const formObj = forms.get(parentFormElement) || formlessObj;
-    if (child instanceof HTMLInputElement || child instanceof HTMLTextAreaElement
-      || child instanceof HTMLSelectElement) {
+    if (child instanceof HTMLInputElement || child instanceof HTMLTextAreaElement ||
+      child instanceof HTMLSelectElement) {
       formObj.inputs.push({
         id: child.id,
         name: child.name,
         placeholder: child instanceof HTMLSelectElement ? undefined : child.placeholder,
         autocomplete: {
           property: child.autocomplete,
+          // Requires `--enable-features=AutofillShowTypePredictions`.
           attribute: child.getAttribute('autocomplete'),
           prediction: child.getAttribute('autofill-prediction'),
         },
@@ -88,16 +89,16 @@ class FormElements extends FRGatherer {
   /** @type {LH.Gatherer.GathererMeta} */
   meta = {
     supportedModes: ['snapshot', 'navigation'],
-  }
+  };
 
   /**
    * @param {LH.Gatherer.FRTransitionalContext} passContext
    * @return {Promise<LH.Artifacts['FormElements']>}
    */
-  async snapshot(passContext) {
+  async getArtifact(passContext) {
     const driver = passContext.driver;
 
-    const formElements = await driver.evaluate(collectFormElements, {
+    const formElements = await driver.executionContext.evaluate(collectFormElements, {
       args: [],
       useIsolation: true,
       deps: [

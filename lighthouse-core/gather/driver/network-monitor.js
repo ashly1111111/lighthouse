@@ -13,52 +13,84 @@
 const log = require('lighthouse-logger');
 const {EventEmitter} = require('events');
 const NetworkRecorder = require('../../lib/network-recorder.js');
-const {NON_NETWORK_PROTOCOLS} = require('../../lib/url-shim.js');
+const NetworkRequest = require('../../lib/network-request.js');
+const URL = require('../../lib/url-shim.js');
+const TargetManager = require('./target-manager.js');
 
 /** @typedef {import('../../lib/network-recorder.js').NetworkRecorderEvent} NetworkRecorderEvent */
-/** @typedef {import('../../lib/network-request.js')} NetworkRequest */
 /** @typedef {'network-2-idle'|'network-critical-idle'|'networkidle'|'networkbusy'|'network-critical-busy'|'network-2-busy'} NetworkMonitorEvent_ */
 /** @typedef {NetworkRecorderEvent|NetworkMonitorEvent_} NetworkMonitorEvent */
+/** @typedef {Record<NetworkMonitorEvent_, []> & Record<NetworkRecorderEvent, [NetworkRequest]> & {protocolmessage: [LH.Protocol.RawEventMessage]}} NetworkMonitorEventMap */
+/** @typedef {LH.Protocol.StrictEventEmitter<NetworkMonitorEventMap>} NetworkMonitorEmitter */
 
-const IGNORED_NETWORK_SCHEMES = [...NON_NETWORK_PROTOCOLS, 'ws'];
-
-class NetworkMonitor extends EventEmitter {
+/** @implements {NetworkMonitorEmitter} */
+class NetworkMonitor {
   /** @type {NetworkRecorder|undefined} */
   _networkRecorder = undefined;
+  /** @type {TargetManager|undefined} */
+  _targetManager = undefined;
   /** @type {Array<LH.Crdp.Page.Frame>} */
   _frameNavigations = [];
 
   /** @param {LH.Gatherer.FRProtocolSession} session */
   constructor(session) {
-    super();
     this._session = session;
+
+    this._onTargetAttached = this._onTargetAttached.bind(this);
+
+    /** @type {Map<string, LH.Gatherer.FRProtocolSession>} */
+    this._sessions = new Map();
 
     /** @param {LH.Crdp.Page.FrameNavigatedEvent} event */
     this._onFrameNavigated = event => this._frameNavigations.push(event.frame);
 
     /** @param {LH.Protocol.RawEventMessage} event */
     this._onProtocolMessage = event => {
+      this.emit('protocolmessage', event);
       if (!this._networkRecorder) return;
       this._networkRecorder.dispatch(event);
     };
 
-    // Redefine the event emitter types with a narrower type signature.
-    /** @param {NetworkMonitorEvent} event @param {*} listener  */
-    this.on = (event, listener) => super.on(event, listener);
-    /** @param {NetworkMonitorEvent} event @param {*} listener  */
-    this.once = (event, listener) => super.once(event, listener);
-    /** @param {NetworkMonitorEvent} event @param {*} listener  */
-    this.off = (event, listener) => super.off(event, listener);
+    // Attach the event emitter types to this class.
+    const emitter = /** @type {NetworkMonitorEmitter} */ (new EventEmitter());
+    /** @type {typeof emitter['emit']} */
+    this.emit = emitter.emit.bind(emitter);
+    /** @type {typeof emitter['on']} */
+    this.on = emitter.on.bind(emitter);
+    /** @type {typeof emitter['once']} */
+    this.once = emitter.once.bind(emitter);
+    /** @type {typeof emitter['off']} */
+    this.off = emitter.off.bind(emitter);
+    /** @type {typeof emitter['addListener']} */
+    this.addListener = emitter.addListener.bind(emitter);
+    /** @type {typeof emitter['removeListener']} */
+    this.removeListener = emitter.removeListener.bind(emitter);
+    /** @type {typeof emitter['removeAllListeners']} */
+    this.removeAllListeners = emitter.removeAllListeners.bind(emitter);
+  }
+
+  /**
+   * @param {{target: {targetId: string}, session: LH.Gatherer.FRProtocolSession}} session
+   */
+  async _onTargetAttached({session, target}) {
+    const targetId = target.targetId;
+
+    this._sessions.set(targetId, session);
+    session.addProtocolMessageListener(this._onProtocolMessage);
+
+    await session.sendCommand('Network.enable');
   }
 
   /**
    * @return {Promise<void>}
    */
   async enable() {
-    if (this._networkRecorder) return;
+    if (this._targetManager) return;
 
     this._frameNavigations = [];
+    this._sessions = new Map();
     this._networkRecorder = new NetworkRecorder();
+    this._targetManager = new TargetManager(this._session);
 
     /**
      * Reemit the same network recorder events.
@@ -74,20 +106,31 @@ class NetworkMonitor extends EventEmitter {
     this._networkRecorder.on('requestloaded', reEmit('requestloaded'));
 
     this._session.on('Page.frameNavigated', this._onFrameNavigated);
-    this._session.addProtocolMessageListener(this._onProtocolMessage);
+    this._targetManager.addTargetAttachedListener(this._onTargetAttached);
 
-    await this._session.sendCommand('Network.enable');
+    await this._session.sendCommand('Page.enable');
+    await this._targetManager.enable();
   }
 
   /**
    * @return {Promise<void>}
    */
   async disable() {
+    if (!this._targetManager) return;
+
     this._session.off('Page.frameNavigated', this._onFrameNavigated);
-    this._session.removeProtocolMessageListener(this._onProtocolMessage);
+    this._targetManager.removeTargetAttachedListener(this._onTargetAttached);
+
+    for (const session of this._sessions.values()) {
+      session.removeProtocolMessageListener(this._onProtocolMessage);
+    }
+
+    await this._targetManager.disable();
 
     this._frameNavigations = [];
     this._networkRecorder = undefined;
+    this._targetManager = undefined;
+    this._sessions = new Map();
   }
 
   /** @return {Promise<string | undefined>} */
@@ -101,7 +144,7 @@ class NetworkMonitor extends EventEmitter {
     const finalNavigation = mainFrameNavigations[mainFrameNavigations.length - 1];
     if (!finalNavigation) log.warn('NetworkMonitor', 'No detected navigations');
 
-    return finalNavigation && finalNavigation.url;
+    return finalNavigation?.url;
   }
 
   /**
@@ -129,7 +172,7 @@ class NetworkMonitor extends EventEmitter {
     if (!this._networkRecorder) return false;
     const requests = this._networkRecorder.getRawRecords();
     const rootFrameRequest = requests.find(r => r.resourceType === 'Document');
-    const rootFrameId = rootFrameRequest && rootFrameRequest.frameId;
+    const rootFrameId = rootFrameRequest?.frameId;
 
     return this._isActiveIdlePeriod(
       0,
@@ -162,7 +205,7 @@ class NetworkMonitor extends EventEmitter {
       const request = requests[i];
       if (request.finished) continue;
       if (requestFilter && !requestFilter(request)) continue;
-      if (NON_NETWORK_PROTOCOLS.includes(request.parsedURL.scheme)) continue;
+      if (NetworkRequest.isNonNetworkRequest(request)) continue;
       inflightRequests++;
     }
 
@@ -199,10 +242,8 @@ class NetworkMonitor extends EventEmitter {
     /** @type {Array<{time: number, isStart: boolean}>} */
     let timeBoundaries = [];
     requests.forEach(request => {
-      const scheme = request.parsedURL && request.parsedURL.scheme;
-      if (IGNORED_NETWORK_SCHEMES.includes(scheme)) {
-        return;
-      }
+      if (URL.isNonNetworkProtocol(request.protocol)) return;
+      if (request.protocol === 'ws' || request.protocol === 'wss') return;
 
       // convert the network timestamp to ms
       timeBoundaries.push({time: request.startTime * 1000, isStart: true});

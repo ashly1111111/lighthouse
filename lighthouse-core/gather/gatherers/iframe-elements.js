@@ -39,17 +39,17 @@ class IFrameElements extends FRGatherer {
   /** @type {LH.Gatherer.GathererMeta} */
   meta = {
     supportedModes: ['snapshot', 'navigation'],
-  }
+  };
 
   /**
    * @param {LH.Gatherer.FRTransitionalContext} passContext
    * @return {Promise<LH.Artifacts['IFrameElements']>}
    * @override
    */
-  async snapshot(passContext) {
+  async getArtifact(passContext) {
     const driver = passContext.driver;
 
-    const iframeElements = await driver.evaluate(collectIFrameElements, {
+    const iframeElements = await driver.executionContext.evaluate(collectIFrameElements, {
       args: [],
       useIsolation: true,
       deps: [

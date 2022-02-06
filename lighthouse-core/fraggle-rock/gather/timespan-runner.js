@@ -7,59 +7,66 @@
 
 const Driver = require('./driver.js');
 const Runner = require('../../runner.js');
+const {
+  getEmptyArtifactState,
+  collectPhaseArtifacts,
+  awaitArtifacts,
+} = require('./runner-helpers.js');
+const {prepareTargetForTimespanMode} = require('../../gather/driver/prepare.js');
 const {initializeConfig} = require('../config/config.js');
-const {getBaseArtifacts} = require('./base-artifacts.js');
+const {getBaseArtifacts, finalizeArtifacts} = require('./base-artifacts.js');
 
 /**
- * @param {{page: import('puppeteer').Page, config?: LH.Config.Json}} options
+ * @param {{page: import('puppeteer').Page, config?: LH.Config.Json, configContext?: LH.Config.FRContext}} options
  * @return {Promise<{endTimespan(): Promise<LH.RunnerResult|undefined>}>}
  */
 async function startTimespan(options) {
-  const {config} = initializeConfig(options.config, {gatherMode: 'timespan'});
+  const {configContext = {}} = options;
+  const {config} = initializeConfig(options.config, {...configContext, gatherMode: 'timespan'});
   const driver = new Driver(options.page);
   await driver.connect();
 
+  /** @type {Map<string, LH.ArbitraryEqualityMap>} */
+  const computedCache = new Map();
+  const artifactDefinitions = config.artifacts || [];
   const requestedUrl = await options.page.url();
+  const baseArtifacts = await getBaseArtifacts(config, driver, {gatherMode: 'timespan'});
+  const artifactState = getEmptyArtifactState();
+  /** @type {Omit<import('./runner-helpers.js').CollectPhaseArtifactOptions, 'phase'>} */
+  const phaseOptions = {
+    driver,
+    artifactDefinitions,
+    artifactState,
+    baseArtifacts,
+    computedCache,
+    gatherMode: 'timespan',
+    settings: config.settings,
+  };
 
-  /** @type {Record<string, Promise<Error|undefined>>} */
-  const artifactErrors = {};
-
-  for (const {id, gatherer} of config.artifacts || []) {
-    artifactErrors[id] = await Promise.resolve()
-      .then(() => gatherer.instance.beforeTimespan({gatherMode: 'timespan', driver}))
-      .catch(err => err);
-  }
+  await prepareTargetForTimespanMode(driver, config.settings);
+  await collectPhaseArtifacts({phase: 'startInstrumentation', ...phaseOptions});
+  await collectPhaseArtifacts({phase: 'startSensitiveInstrumentation', ...phaseOptions});
 
   return {
     async endTimespan() {
       const finalUrl = await options.page.url();
-      return Runner.run(
+      const runnerOptions = {config, computedCache};
+      const artifacts = await Runner.gather(
         async () => {
-          const baseArtifacts = getBaseArtifacts(config);
           baseArtifacts.URL.requestedUrl = requestedUrl;
           baseArtifacts.URL.finalUrl = finalUrl;
 
-          /** @type {Partial<LH.GathererArtifacts>} */
-          const artifacts = {};
+          await collectPhaseArtifacts({phase: 'stopSensitiveInstrumentation', ...phaseOptions});
+          await collectPhaseArtifacts({phase: 'stopInstrumentation', ...phaseOptions});
+          await collectPhaseArtifacts({phase: 'getArtifact', ...phaseOptions});
+          await driver.disconnect();
 
-          for (const {id, gatherer} of config.artifacts || []) {
-            const artifactName = /** @type {keyof LH.GathererArtifacts} */ (id);
-            const artifact = artifactErrors[id]
-              ? Promise.reject(artifactErrors[id])
-              : await Promise.resolve()
-                  .then(() => gatherer.instance.afterTimespan({gatherMode: 'timespan', driver}))
-                  .catch(err => err);
-
-            artifacts[artifactName] = artifact;
-          }
-
-          return /** @type {LH.Artifacts} */ ({...baseArtifacts, ...artifacts}); // Cast to drop Partial<>
+          const artifacts = await awaitArtifacts(artifactState);
+          return finalizeArtifacts(baseArtifacts, artifacts);
         },
-        {
-          url: finalUrl,
-          config,
-        }
+        runnerOptions
       );
+      return Runner.audit(artifacts, runnerOptions);
     },
   };
 }

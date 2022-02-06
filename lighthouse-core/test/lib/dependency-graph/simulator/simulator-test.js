@@ -23,6 +23,7 @@ function request(opts) {
     requestId: opts.requestId || nextRequestId++,
     url,
     transferSize: opts.transferSize || 1000,
+    protocol: scheme,
     parsedURL: {scheme, host: 'example.com', securityOrigin: url},
     timing: opts.timing,
   }, opts);
@@ -381,6 +382,26 @@ describe('DependencyGraph/Simulator', () => {
           expect(startTime).toBeGreaterThanOrEqual(previousStartTime);
         }
       });
+    });
+  });
+
+  describe('.simulateTimespan', () => {
+    it('calculates savings using throughput', () => {
+      const simulator = new Simulator({throughput: 1000, observedThroughput: 2000});
+      const wastedMs = simulator.computeWastedMsFromWastedBytes(500);
+      expect(wastedMs).toBeCloseTo(4000);
+    });
+
+    it('falls back to observed throughput if throughput is 0', () => {
+      const simulator = new Simulator({throughput: 0, observedThroughput: 2000});
+      const wastedMs = simulator.computeWastedMsFromWastedBytes(500);
+      expect(wastedMs).toBeCloseTo(2000);
+    });
+
+    it('returns 0 if throughput and observed throughput are 0', () => {
+      const simulator = new Simulator({throughput: 0, observedThroughput: 0});
+      const wastedMs = simulator.computeWastedMsFromWastedBytes(500);
+      expect(wastedMs).toEqual(0);
     });
   });
 });

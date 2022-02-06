@@ -28,15 +28,15 @@ class Doctype extends FRGatherer {
   /** @type {LH.Gatherer.GathererMeta} */
   meta = {
     supportedModes: ['snapshot', 'navigation'],
-  }
+  };
 
   /**
    * @param {LH.Gatherer.FRTransitionalContext} passContext
    * @return {Promise<LH.Artifacts['Doctype']>}
    */
-  snapshot(passContext) {
+  getArtifact(passContext) {
     const driver = passContext.driver;
-    return driver.evaluate(getDoctype, {
+    return driver.executionContext.evaluate(getDoctype, {
       args: [],
       useIsolation: true,
     });

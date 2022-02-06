@@ -5,15 +5,19 @@
  */
 'use strict';
 
+const log = require('lighthouse-logger');
 const ProtocolSession = require('./session.js');
 const ExecutionContext = require('../../gather/driver/execution-context.js');
+const Fetcher = require('../../gather/fetcher.js');
 
+/** @return {*} */
 const throwNotConnectedFn = () => {
   throw new Error('Session not connected');
 };
 
 /** @type {LH.Gatherer.FRProtocolSession} */
 const defaultSession = {
+  setTargetInfo: throwNotConnectedFn,
   hasNextProtocolTimeout: throwNotConnectedFn,
   getNextProtocolTimeout: throwNotConnectedFn,
   setNextProtocolTimeout: throwNotConnectedFn,
@@ -22,7 +26,10 @@ const defaultSession = {
   off: throwNotConnectedFn,
   addProtocolMessageListener: throwNotConnectedFn,
   removeProtocolMessageListener: throwNotConnectedFn,
+  addSessionAttachedListener: throwNotConnectedFn,
+  removeSessionAttachedListener: throwNotConnectedFn,
   sendCommand: throwNotConnectedFn,
+  dispose: throwNotConnectedFn,
 };
 
 /** @implements {LH.Gatherer.FRTransitionalDriver} */
@@ -36,39 +43,45 @@ class Driver {
     this._session = undefined;
     /** @type {ExecutionContext|undefined} */
     this._executionContext = undefined;
+    /** @type {Fetcher|undefined} */
+    this._fetcher = undefined;
 
     this.defaultSession = defaultSession;
+  }
+
+  /** @return {LH.Gatherer.FRTransitionalDriver['executionContext']} */
+  get executionContext() {
+    if (!this._executionContext) return throwNotConnectedFn();
+    return this._executionContext;
+  }
+
+  /** @return {Fetcher} */
+  get fetcher() {
+    if (!this._fetcher) return throwNotConnectedFn();
+    return this._fetcher;
+  }
+
+  /** @return {Promise<string>} */
+  async url() {
+    return this._page.url();
   }
 
   /** @return {Promise<void>} */
   async connect() {
     if (this._session) return;
+    const status = {msg: 'Connecting to browser', id: 'lh:driver:connect'};
+    log.time(status);
     const session = await this._page.target().createCDPSession();
     this._session = this.defaultSession = new ProtocolSession(session);
     this._executionContext = new ExecutionContext(this._session);
+    this._fetcher = new Fetcher(this._session, this._executionContext);
+    log.timeEnd(status);
   }
 
-  /**
-   * @param {string} expression
-   * @param {{useIsolation?: boolean}} [options]
-   * @return {Promise<*>}
-   */
-  async evaluateAsync(expression, options) {
-    if (!this._executionContext) throw new Error('Driver not connected to page');
-    return this._executionContext.evaluateAsync(expression, options);
-  }
-
-  /**
-   * @template {any[]} T, R
-   * @param {((...args: T) => R)} mainFn The main function to call.
-   * @param {{args: T, useIsolation?: boolean, deps?: Array<Function|string>}} options `args` should
-   *   match the args of `mainFn`, and can be any serializable value. `deps` are functions that must be
-   *   defined for `mainFn` to work.
-   * @return {FlattenedPromise<R>}
-   */
-  evaluate(mainFn, options) {
-    if (!this._executionContext) throw new Error('Driver not connected to page');
-    return this._executionContext.evaluate(mainFn, options);
+  /** @return {Promise<void>} */
+  async disconnect() {
+    if (!this._session) return;
+    await this._session.dispose();
   }
 }
 

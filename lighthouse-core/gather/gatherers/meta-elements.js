@@ -8,12 +8,18 @@
 const FRGatherer = require('../../fraggle-rock/gather/base-gatherer.js');
 const pageFunctions = require('../../lib/page-functions.js');
 
-/* globals getElementsInDocument */
+/* globals getElementsInDocument getNodeDetails */
 
 /* c8 ignore start */
 function collectMetaElements() {
-  // @ts-expect-error - getElementsInDocument put into scope via stringification
-  const metas = /** @type {HTMLMetaElement[]} */ (getElementsInDocument('head meta'));
+  const functions = /** @type {typeof pageFunctions} */({
+    // @ts-expect-error - getElementsInDocument put into scope via stringification
+    getElementsInDocument,
+    // @ts-expect-error - getNodeDetails put into scope via stringification
+    getNodeDetails,
+  });
+
+  const metas = functions.getElementsInDocument('head meta');
   return metas.map(meta => {
     /** @param {string} name */
     const getAttribute = name => {
@@ -27,6 +33,7 @@ function collectMetaElements() {
       property: getAttribute('property'),
       httpEquiv: meta.httpEquiv ? meta.httpEquiv.toLowerCase() : undefined,
       charset: getAttribute('charset'),
+      node: functions.getNodeDetails(meta),
     };
   });
 }
@@ -36,21 +43,24 @@ class MetaElements extends FRGatherer {
   /** @type {LH.Gatherer.GathererMeta} */
   meta = {
     supportedModes: ['snapshot', 'navigation'],
-  }
+  };
 
   /**
    * @param {LH.Gatherer.FRTransitionalContext} passContext
    * @return {Promise<LH.Artifacts['MetaElements']>}
    */
-  snapshot(passContext) {
+  getArtifact(passContext) {
     const driver = passContext.driver;
 
     // We'll use evaluateAsync because the `node.getAttribute` method doesn't actually normalize
     // the values like access from JavaScript does.
-    return driver.evaluate(collectMetaElements, {
+    return driver.executionContext.evaluate(collectMetaElements, {
       args: [],
       useIsolation: true,
-      deps: [pageFunctions.getElementsInDocument],
+      deps: [
+        pageFunctions.getElementsInDocument,
+        pageFunctions.getNodeDetailsString,
+      ],
     });
   }
 }

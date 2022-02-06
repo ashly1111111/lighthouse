@@ -30,17 +30,17 @@ function getViewportDimensions() {
 class ViewportDimensions extends FRGatherer {
   /** @type {LH.Gatherer.GathererMeta} */
   meta = {
-    supportedModes: ['snapshot', 'navigation'],
-  }
+    supportedModes: ['snapshot', 'timespan', 'navigation'],
+  };
 
   /**
    * @param {LH.Gatherer.FRTransitionalContext} passContext
    * @return {Promise<LH.Artifacts.ViewportDimensions>}
    */
-  async snapshot(passContext) {
+  async getArtifact(passContext) {
     const driver = passContext.driver;
 
-    const dimensions = await driver.evaluate(getViewportDimensions, {
+    const dimensions = await driver.executionContext.evaluate(getViewportDimensions, {
       args: [],
       useIsolation: true,
     });
